@@ -110,7 +110,7 @@ Summarize the following PubMed abstract in **Korean** with exactly 4-5 bullet po
 Focus on: key findings, translational implications for {category}, relation to drug repositioning / rehabilitation / electrical stimulation / gene therapy / scaffolds.
 Abstract: {abstract}"""
     response = client.chat.completions.create(
-        model="grok-4", messages=[{"role": "user", "content": prompt}],
+        model="grok-4-fast", messages=[{"role": "user", "content": prompt}],
         max_tokens=600, temperature=0.3
     )
     return response.choices[0].message.content.strip()
