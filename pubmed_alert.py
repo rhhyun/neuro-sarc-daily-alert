@@ -33,19 +33,15 @@ NEURAL_QUERY = f'("spinal cord injury"[Title/Abstract] OR "peripheral nerve inju
 SARC_QUERY = f'("sarcopenia"[Title/Abstract] OR "muscle atrophy"[Title/Abstract] OR "muscle wasting"[Title/Abstract]) AND ("drug repositioning"[Title/Abstract] OR repositioning[Title/Abstract] OR rehabilitation[Title/Abstract] OR "physical therapy"[Title/Abstract] OR "electrical stimulation"[Title/Abstract] OR NMES[Title/Abstract] OR FES[Title/Abstract] OR electrostimulation[Title/Abstract]) AND ("{date_str}"[PDAT] : "{date_str}"[PDAT])'
 
 def find_key(obj, key, default="Unknown"):
-    """재귀적으로 키 찾기 (NCBI XML 구조 완벽 대응)"""
     if isinstance(obj, dict):
-        if key in obj:
-            return obj[key]
+        if key in obj: return obj[key]
         for v in obj.values():
             result = find_key(v, key, default)
-            if result != default:
-                return result
-    elif isinstance(obj, list):
+            if result != default: return result
+    elif isinstance(obj, (list, tuple)):
         for item in obj:
             result = find_key(item, key, default)
-            if result != default:
-                return result
+            if result != default: return result
     return default
 
 def fetch_papers(query, max_results=30):
@@ -63,36 +59,22 @@ def fetch_papers(query, max_results=30):
             raw_record = Entrez.read(handle)
             handle.close()
 
-            # DictionaryElement → dict 변환
-            if hasattr(raw_record, 'keys'):
-                raw_record = dict(raw_record)
-
-            # PubmedArticleSet 처리
+            if hasattr(raw_record, 'keys'): raw_record = dict(raw_record)
             if isinstance(raw_record, dict) and "PubmedArticleSet" in raw_record:
                 article_set = raw_record["PubmedArticleSet"]
                 article = article_set[0] if isinstance(article_set, (list, tuple)) and article_set else article_set
             else:
                 article = raw_record
+            if hasattr(article, 'keys'): article = dict(article)
 
-            if hasattr(article, 'keys'):
-                article = dict(article)
-
-            # Title / Journal 재귀 검색 (최종 강화)
             title = find_key(article, "ArticleTitle", "No Title")
-            journal = find_key(article, "Title", "Unknown Journal")  # Journal 내 Title
-
+            journal = find_key(article, "Title", "Unknown Journal")
             abstract_section = find_key(article, "Abstract", {})
             abstract_list = find_key(abstract_section, "AbstractText", [])
             abstract = " ".join([str(a) for a in abstract_list]) if isinstance(abstract_list, (list, tuple)) else str(abstract_list)
 
             if any(j.lower() in journal.lower() for j in HIGH_IMPACT_JOURNALS) or len(papers) < 8:
-                papers.append({
-                    "pmid": pmid,
-                    "title": title,
-                    "journal": journal,
-                    "abstract": abstract,
-                    "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
-                })
+                papers.append({"pmid": pmid, "title": title, "journal": journal, "abstract": abstract, "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"})
                 print(f"✅ Added: {title[:70]}... ({journal})")
         except Exception as e:
             print(f"Error PMID {pmid}: {e}")
@@ -103,15 +85,19 @@ def fetch_papers(query, max_results=30):
 
 def grok_summarize(abstract, category):
     if not abstract.strip():
-        return "• Abstract가 없거나 비공개입니다."
+        return "<p>Abstract가 없거나 비공개입니다.</p>"
     client = OpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
     prompt = f"""You are a senior researcher in neural regeneration/plasticity and sarcopenia.
-Summarize the following PubMed abstract in **Korean** with exactly 4-5 bullet points.
+Output **ONLY HTML** (no ```html, no extra text).
+Use <strong> for bold, <ul><li> for bullet points.
+Exactly 4-5 bullet points.
 Focus on: key findings, translational implications for {category}, relation to drug repositioning / rehabilitation / electrical stimulation / gene therapy / scaffolds.
 Abstract: {abstract}"""
     response = client.chat.completions.create(
-        model="grok-4-fast", messages=[{"role": "user", "content": prompt}],
-        max_tokens=600, temperature=0.3
+        model="grok-4-fast",   # 비용 절감용 (원하시면 grok-4로 변경 가능)
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=700,
+        temperature=0.3
     )
     return response.choices[0].message.content.strip()
 
@@ -120,34 +106,49 @@ def send_email(neural_papers, sarc_papers):
         print("No papers today")
         return
 
-    body = f"""안녕하세요, 연구자님.
+    body_html = f"""<html><body style="font-family: Arial, sans-serif; line-height: 1.6;">
+    <p>안녕하세요, 연구자님.</p>
+    <p><strong>{today.strftime("%Y-%m-%d")}</strong> PubMed 등록 논문 요약입니다.</p>
 
-{today.strftime("%Y-%m-%d")} PubMed 등록 논문 요약입니다.
-
-### 【신경재생·가소성 섹션】
+    <h3>【신경재생·가소성 섹션】</h3>
 """
     for i, p in enumerate(neural_papers, 1):
         summary = grok_summarize(p["abstract"], "neural regeneration and plasticity")
-        body += f"**{i}. {p['title']}**\nJournal: {p['journal']}\nPMID: {p['pmid']}\nLink: {p['link']}\n요약:\n{summary}\n\n"
+        body_html += f"""
+    <p><strong>{i}. {p['title']}</strong><br>
+    Journal: {p['journal']}<br>
+    PMID: {p['pmid']}<br>
+    Link: <a href="{p['link']}">{p['link']}</a><br>
+    요약:<br>
+    {summary}</p>
+"""
 
-    body += "### 【사르코페니아 섹션 (SCI 무관)】\n"
+    body_html += "<h3>【사르코페니아 섹션 (SCI 무관)】</h3>"
     for i, p in enumerate(sarc_papers, 1):
         summary = grok_summarize(p["abstract"], "sarcopenia with drug repositioning, rehabilitation, electrical stimulation")
-        body += f"**{i}. {p['title']}**\nJournal: {p['journal']}\nPMID: {p['pmid']}\nLink: {p['link']}\n요약:\n{summary}\n\n"
+        body_html += f"""
+    <p><strong>{i}. {p['title']}</strong><br>
+    Journal: {p['journal']}<br>
+    PMID: {p['pmid']}<br>
+    Link: <a href="{p['link']}">{p['link']}</a><br>
+    요약:<br>
+    {summary}</p>
+"""
 
-    body += "총평: Grok-4 자동 분석 완료. 연구에 바로 활용하세요."
+    body_html += "<p><em>총평: Grok-4 자동 분석 완료. 연구에 바로 활용하세요.</em></p></body></html>"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"[{yesterday_date}] 신경재생·가소성 + 사르코페니아 논문 요약 ({len(neural_papers)+len(sarc_papers)}건)"
-    msg["From"] = f"Neuro-Sarc Alert <{GMAIL_USER}>"   # 자연스러운 From 이름
+    msg["From"] = f"Neuro-Sarc Alert <{GMAIL_USER}>"
     msg["To"] = TO_EMAIL
-    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    msg.attach(MIMEText(body_html, "html", "utf-8"))
 
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         server.starttls()
         server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         server.send_message(msg)
-    print("✅ Email sent successfully!")
+    print("✅ HTML Email sent successfully!")
 
 if __name__ == "__main__":
     print("=== Neuro-Sarc Daily Alert Script Started ===")
