@@ -23,27 +23,30 @@ HIGH_IMPACT_JOURNALS = [
     "Rehabilitation", "Frontiers in Pharmacology", "Nutrients", "Stem Cell Reports"
 ]
 
-# 날짜
 today = datetime.date.today()
 yesterday = today - datetime.timedelta(days=1)
 date_str = yesterday.strftime("%Y/%m/%d")
 yesterday_date = yesterday.strftime("%Y-%m-%d")
 
-NEURAL_QUERY = (
-    f'("spinal cord injury"[Title/Abstract] OR "peripheral nerve injury"[Title/Abstract] '
-    f'OR electroceutical*[Title/Abstract] OR "drug repositioning"[Title/Abstract] '
-    f'OR "gene therapy"[Title/Abstract] OR "biomaterial scaffold"[Title/Abstract] '
-    f'OR "neural regeneration"[Title/Abstract] OR "neural plasticity"[Title/Abstract] '
-    f'OR "axon regeneration"[Title/Abstract]) AND ("{date_str}"[PDAT] : "{date_str}"[PDAT])'
-)
+NEURAL_QUERY = f'("spinal cord injury"[Title/Abstract] OR "peripheral nerve injury"[Title/Abstract] OR electroceutical*[Title/Abstract] OR "drug repositioning"[Title/Abstract] OR "gene therapy"[Title/Abstract] OR "biomaterial scaffold"[Title/Abstract] OR "neural regeneration"[Title/Abstract] OR "neural plasticity"[Title/Abstract] OR "axon regeneration"[Title/Abstract]) AND ("{date_str}"[PDAT] : "{date_str}"[PDAT])'
 
-SARC_QUERY = (
-    f'("sarcopenia"[Title/Abstract] OR "muscle atrophy"[Title/Abstract] OR "muscle wasting"[Title/Abstract]) '
-    f'AND ("drug repositioning"[Title/Abstract] OR repositioning[Title/Abstract] OR rehabilitation[Title/Abstract] '
-    f'OR "physical therapy"[Title/Abstract] OR "electrical stimulation"[Title/Abstract] '
-    f'OR NMES[Title/Abstract] OR FES[Title/Abstract] OR electrostimulation[Title/Abstract]) '
-    f'AND ("{date_str}"[PDAT] : "{date_str}"[PDAT])'
-)
+SARC_QUERY = f'("sarcopenia"[Title/Abstract] OR "muscle atrophy"[Title/Abstract] OR "muscle wasting"[Title/Abstract]) AND ("drug repositioning"[Title/Abstract] OR repositioning[Title/Abstract] OR rehabilitation[Title/Abstract] OR "physical therapy"[Title/Abstract] OR "electrical stimulation"[Title/Abstract] OR NMES[Title/Abstract] OR FES[Title/Abstract] OR electrostimulation[Title/Abstract]) AND ("{date_str}"[PDAT] : "{date_str}"[PDAT])'
+
+def find_key(obj, key, default="Unknown"):
+    """재귀적으로 키 찾기 (NCBI XML 구조 완벽 대응)"""
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for v in obj.values():
+            result = find_key(v, key, default)
+            if result != default:
+                return result
+    elif isinstance(obj, list):
+        for item in obj:
+            result = find_key(item, key, default)
+            if result != default:
+                return result
+    return default
 
 def fetch_papers(query, max_results=30):
     print(f"Fetching papers for query (date: {date_str}): {query[:150]}...")
@@ -60,28 +63,27 @@ def fetch_papers(query, max_results=30):
             raw_record = Entrez.read(handle)
             handle.close()
 
-            # === 최종 핵심 수정: DictionaryElement 강제 dict 변환 ===
+            # DictionaryElement → dict 변환
             if hasattr(raw_record, 'keys'):
-                raw_record = dict(raw_record)  # DictionaryElement → 일반 dict
+                raw_record = dict(raw_record)
 
             # PubmedArticleSet 처리
             if isinstance(raw_record, dict) and "PubmedArticleSet" in raw_record:
                 article_set = raw_record["PubmedArticleSet"]
-                if isinstance(article_set, (list, tuple)) and len(article_set) > 0:
-                    article = dict(article_set[0]) if hasattr(article_set[0], 'keys') else article_set[0]
-                else:
-                    article = dict(article_set) if hasattr(article_set, 'keys') else article_set
+                article = article_set[0] if isinstance(article_set, (list, tuple)) and article_set else article_set
             else:
-                article = dict(raw_record) if hasattr(raw_record, 'keys') else raw_record
+                article = raw_record
 
-            # MedlineCitation → Article 추출
-            medline = article.get("MedlineCitation", {}) if isinstance(article, dict) else {}
-            cit = medline.get("Article", {}) if isinstance(medline, dict) else {}
-            journal = cit.get("Journal", {}).get("Title", "Unknown Journal") if isinstance(cit, dict) else "Unknown Journal"
-            title = cit.get("ArticleTitle", "No Title") if isinstance(cit, dict) else "No Title"
-            abstract_section = cit.get("Abstract", {}) if isinstance(cit, dict) else {}
-            abstract_list = abstract_section.get("AbstractText", []) if isinstance(abstract_section, dict) else []
-            abstract = " ".join([str(a) for a in abstract_list]) if abstract_list else ""
+            if hasattr(article, 'keys'):
+                article = dict(article)
+
+            # Title / Journal 재귀 검색 (최종 강화)
+            title = find_key(article, "ArticleTitle", "No Title")
+            journal = find_key(article, "Title", "Unknown Journal")  # Journal 내 Title
+
+            abstract_section = find_key(article, "Abstract", {})
+            abstract_list = find_key(abstract_section, "AbstractText", [])
+            abstract = " ".join([str(a) for a in abstract_list]) if isinstance(abstract_list, (list, tuple)) else str(abstract_list)
 
             if any(j.lower() in journal.lower() for j in HIGH_IMPACT_JOURNALS) or len(papers) < 8:
                 papers.append({
@@ -91,9 +93,9 @@ def fetch_papers(query, max_results=30):
                     "abstract": abstract,
                     "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
                 })
-                print(f"✅ Added paper: {title[:70]}... ({journal})")
+                print(f"✅ Added: {title[:70]}... ({journal})")
         except Exception as e:
-            print(f"Error processing PMID {pmid}: {e}")
+            print(f"Error PMID {pmid}: {e}")
             continue
 
     print(f"Final papers collected: {len(papers)}")
@@ -101,29 +103,26 @@ def fetch_papers(query, max_results=30):
 
 def grok_summarize(abstract, category):
     if not abstract.strip():
-        return "• Abstract가 없거나 비공개입니다.\n• 연구자 관점에서 중요 정보 부족."
+        return "• Abstract가 없거나 비공개입니다."
     client = OpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
     prompt = f"""You are a senior researcher in neural regeneration/plasticity and sarcopenia.
 Summarize the following PubMed abstract in **Korean** with exactly 4-5 bullet points.
 Focus on: key findings, translational implications for {category}, relation to drug repositioning / rehabilitation / electrical stimulation / gene therapy / scaffolds.
 Abstract: {abstract}"""
     response = client.chat.completions.create(
-        model="grok-4",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=600,
-        temperature=0.3
+        model="grok-4", messages=[{"role": "user", "content": prompt}],
+        max_tokens=600, temperature=0.3
     )
     return response.choices[0].message.content.strip()
 
 def send_email(neural_papers, sarc_papers):
     if not neural_papers and not sarc_papers:
-        print("No papers today - skipping email")
+        print("No papers today")
         return
 
     body = f"""안녕하세요, 연구자님.
 
-{today.strftime("%Y-%m-%d")} PubMed 등록 논문 중 
-신경재생·가소성 {len(neural_papers)}건 + 사르코페니아(독립·리포지셔닝·재활·전기자극) {len(sarc_papers)}건을 선별했습니다.
+{today.strftime("%Y-%m-%d")} PubMed 등록 논문 요약입니다.
 
 ### 【신경재생·가소성 섹션】
 """
@@ -140,7 +139,7 @@ def send_email(neural_papers, sarc_papers):
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"[{yesterday_date}] 신경재생·가소성 + 사르코페니아 논문 요약 ({len(neural_papers)+len(sarc_papers)}건)"
-    msg["From"] = GMAIL_USER
+    msg["From"] = f"Neuro-Sarc Alert <{GMAIL_USER}>"   # 자연스러운 From 이름
     msg["To"] = TO_EMAIL
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
@@ -153,13 +152,7 @@ def send_email(neural_papers, sarc_papers):
 if __name__ == "__main__":
     print("=== Neuro-Sarc Daily Alert Script Started ===")
     print(f"Yesterday date: {yesterday_date}")
-    try:
-        neural = fetch_papers(NEURAL_QUERY)
-        sarc = fetch_papers(SARC_QUERY)
-        send_email(neural, sarc)
-        print("=== Script completed SUCCESSFULLY ===")
-    except Exception as e:
-        print("=== CRITICAL ERROR ===")
-        print(str(e))
-        traceback.print_exc()
-        raise
+    neural = fetch_papers(NEURAL_QUERY)
+    sarc = fetch_papers(SARC_QUERY)
+    send_email(neural, sarc)
+    print("=== Script completed SUCCESSFULLY ===")
