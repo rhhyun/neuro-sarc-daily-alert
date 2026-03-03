@@ -85,18 +85,18 @@ def fetch_papers(query, max_results=30):
 
 def grok_summarize(abstract, category):
     if not abstract.strip():
-        return "<p>Abstract가 없거나 비공개입니다.</p>"
+        return "<p>Abstract 없음.</p>"
     client = OpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
     prompt = f"""You are a senior researcher in neural regeneration/plasticity and sarcopenia.
 Output **ONLY HTML** (no ```html, no extra text).
 Use <strong> for bold, <ul><li> for bullet points.
-Exactly 4-5 bullet points.
-Focus on: key findings, translational implications for {category}, relation to drug repositioning / rehabilitation / electrical stimulation / gene therapy / scaffolds.
+**Exactly 2-3 bullet points only** — the most important points only.
+Keep it very concise and focused on translational value for the researcher.
 Abstract: {abstract}"""
     response = client.chat.completions.create(
-        model="grok-4-fast",   # 비용 절감용 (원하시면 grok-4로 변경 가능)
+        model="grok-4-fast",
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=700,
+        max_tokens=500,
         temperature=0.3
     )
     return response.choices[0].message.content.strip()
@@ -106,7 +106,7 @@ def send_email(neural_papers, sarc_papers):
         print("No papers today")
         return
 
-    body_html = f"""<html><body style="font-family: Arial, sans-serif; line-height: 1.6;">
+    body_html = f"""<html><body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
     <p>안녕하세요, 연구자님.</p>
     <p><strong>{today.strftime("%Y-%m-%d")}</strong> PubMed 등록 논문 요약입니다.</p>
 
@@ -141,14 +141,13 @@ def send_email(neural_papers, sarc_papers):
     msg["Subject"] = f"[{yesterday_date}] 신경재생·가소성 + 사르코페니아 논문 요약 ({len(neural_papers)+len(sarc_papers)}건)"
     msg["From"] = f"Neuro-Sarc Alert <{GMAIL_USER}>"
     msg["To"] = TO_EMAIL
-
     msg.attach(MIMEText(body_html, "html", "utf-8"))
 
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         server.starttls()
         server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         server.send_message(msg)
-    print("✅ HTML Email sent successfully!")
+    print("✅ Concise HTML Email sent successfully!")
 
 if __name__ == "__main__":
     print("=== Neuro-Sarc Daily Alert Script Started ===")
