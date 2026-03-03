@@ -29,7 +29,6 @@ yesterday = today - datetime.timedelta(days=1)
 date_str = yesterday.strftime("%Y/%m/%d")
 yesterday_date = yesterday.strftime("%Y-%m-%d")
 
-# 검색 쿼리 (변경 없음)
 NEURAL_QUERY = (
     f'("spinal cord injury"[Title/Abstract] OR "peripheral nerve injury"[Title/Abstract] '
     f'OR electroceutical*[Title/Abstract] OR "drug repositioning"[Title/Abstract] '
@@ -61,7 +60,7 @@ def fetch_papers(query, max_results=30):
             raw_record = Entrez.read(handle)
             handle.close()
 
-            # === 핵심 수정: NCBI XML 구조 안전 처리 ===
+            # === 핵심 수정: NCBI XML 구조 안전 처리 (2026년 기준) ===
             if isinstance(raw_record, dict) and "PubmedArticleSet" in raw_record:
                 article_set = raw_record["PubmedArticleSet"]
                 if isinstance(article_set, list) and len(article_set) > 0:
@@ -75,7 +74,6 @@ def fetch_papers(query, max_results=30):
                 print(f"PMID {pmid}: Unexpected record type {type(raw_record)}")
                 continue
 
-            # MedlineCitation 추출
             medline = article.get("MedlineCitation", {})
             cit = medline.get("Article", {})
             journal = cit.get("Journal", {}).get("Title", "Unknown Journal")
