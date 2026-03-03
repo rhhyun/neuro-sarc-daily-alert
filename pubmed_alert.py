@@ -23,7 +23,7 @@ HIGH_IMPACT_JOURNALS = [
     "Rehabilitation", "Frontiers in Pharmacology", "Nutrients", "Stem Cell Reports"
 ]
 
-# 날짜 계산
+# 날짜
 today = datetime.date.today()
 yesterday = today - datetime.timedelta(days=1)
 date_str = yesterday.strftime("%Y/%m/%d")
@@ -60,25 +60,26 @@ def fetch_papers(query, max_results=30):
             raw_record = Entrez.read(handle)
             handle.close()
 
-            # === 핵심 수정: NCBI XML 구조 안전 처리 (2026년 기준) ===
+            # === 최종 핵심 수정: DictionaryElement 강제 dict 변환 ===
+            if hasattr(raw_record, 'keys'):
+                raw_record = dict(raw_record)  # DictionaryElement → 일반 dict
+
+            # PubmedArticleSet 처리
             if isinstance(raw_record, dict) and "PubmedArticleSet" in raw_record:
                 article_set = raw_record["PubmedArticleSet"]
-                if isinstance(article_set, list) and len(article_set) > 0:
-                    article = article_set[0]
+                if isinstance(article_set, (list, tuple)) and len(article_set) > 0:
+                    article = dict(article_set[0]) if hasattr(article_set[0], 'keys') else article_set[0]
                 else:
-                    print(f"PMID {pmid}: Empty PubmedArticleSet")
-                    continue
-            elif isinstance(raw_record, list) and len(raw_record) > 0:
-                article = raw_record[0]
+                    article = dict(article_set) if hasattr(article_set, 'keys') else article_set
             else:
-                print(f"PMID {pmid}: Unexpected record type {type(raw_record)}")
-                continue
+                article = dict(raw_record) if hasattr(raw_record, 'keys') else raw_record
 
-            medline = article.get("MedlineCitation", {})
-            cit = medline.get("Article", {})
-            journal = cit.get("Journal", {}).get("Title", "Unknown Journal")
-            title = cit.get("ArticleTitle", "No Title")
-            abstract_section = cit.get("Abstract", {})
+            # MedlineCitation → Article 추출
+            medline = article.get("MedlineCitation", {}) if isinstance(article, dict) else {}
+            cit = medline.get("Article", {}) if isinstance(medline, dict) else {}
+            journal = cit.get("Journal", {}).get("Title", "Unknown Journal") if isinstance(cit, dict) else "Unknown Journal"
+            title = cit.get("ArticleTitle", "No Title") if isinstance(cit, dict) else "No Title"
+            abstract_section = cit.get("Abstract", {}) if isinstance(cit, dict) else {}
             abstract_list = abstract_section.get("AbstractText", []) if isinstance(abstract_section, dict) else []
             abstract = " ".join([str(a) for a in abstract_list]) if abstract_list else ""
 
@@ -90,7 +91,7 @@ def fetch_papers(query, max_results=30):
                     "abstract": abstract,
                     "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
                 })
-                print(f"Added paper: {title[:60]}... ({journal})")
+                print(f"✅ Added paper: {title[:70]}... ({journal})")
         except Exception as e:
             print(f"Error processing PMID {pmid}: {e}")
             continue
