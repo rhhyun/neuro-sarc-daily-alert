@@ -5,7 +5,8 @@ from Bio import Entrez
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import google.generativeai as genai  # OpenAI 대신 Google 공식 라이브러리 사용
+import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 # 환경 변수 설정
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -47,12 +48,15 @@ def find_key(obj, key, default="Unknown"):
     return default
 
 def fetch_papers(query, max_results=30):
-    print(f"Fetching papers for query (date: {date_str}): {query[:150]}...")
-    handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results, sort="pub+date")
-    record = Entrez.read(handle)
-    handle.close()
-    pmids = record.get("IdList", [])
-    print(f"Found {len(pmids)} PMIDs")
+    print(f"Fetching papers... Query snippet: {query[:100]}...")
+    try:
+        handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results, sort="pub+date")
+        record = Entrez.read(handle)
+        handle.close()
+        pmids = record.get("IdList", [])
+    except Exception as e:
+        print(f"Entrez search error: {e}")
+        return []
 
     papers = []
     for pmid in pmids:
@@ -75,79 +79,151 @@ def fetch_papers(query, max_results=30):
             abstract_list = find_key(abstract_section, "AbstractText", [])
             abstract = " ".join([str(a) for a in abstract_list]) if isinstance(abstract_list, (list, tuple)) else str(abstract_list)
 
-            if any(j.lower() in journal.lower() for j in HIGH_IMPACT_JOURNALS) or len(papers) < 8:
-                papers.append({"pmid": pmid, "title": title, "journal": journal, "abstract": abstract, "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"})
-                print(f"✅ Added: {title[:70]}... ({journal})")
+            # High-impact 저널 여부 확인 (대소문자 구분 없이)
+            is_high_impact = any(j.lower() in journal.lower() for j in HIGH_IMPACT_JOURNALS)
+            
+            papers.append({
+                "pmid": pmid, 
+                "title": title, 
+                "journal": journal, 
+                "abstract": abstract, 
+                "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                "is_high_impact": is_high_impact
+            })
         except Exception as e:
-            print(f"Error PMID {pmid}: {e}")
+            print(f"Error processing PMID {pmid}: {e}")
             continue
 
-    print(f"Final papers collected: {len(papers)}")
-    return papers[:8]
+    return papers
 
-def gemini_summarize(abstract, category):
-    if not abstract.strip():
-        return "<p>Abstract 없음.</p>"
+def gemini_summarize(abstract, title):
+    if not abstract.strip() or abstract == "Unknown":
+        return "<p>제공된 Abstract가 없습니다.</p>"
     
-    # 무료로 가장 빠르고 효율적인 모델 선택
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    prompt = f"""You are a senior clinical researcher in neural regeneration/plasticity and sarcopenia.
-Strictly base your summary ONLY on the provided abstract. Ensure high academic accuracy and clear evidence basis.
-Output **ONLY HTML** (no ```html, no extra text).
+    # 임상/학술적 근거와 정확한 사실 기반을 강조한 프롬프트 구성
+    prompt = f"""You are a senior clinical researcher evaluating medical literature.
+Strictly base your summary ONLY on the provided abstract. The content must be based on clear evidence, accurate facts, and relevant clinical/academic guidelines. Do not hallucinate or add outside information.
+Output **ONLY HTML** (no ```html, no markdown blocks).
 Use <strong> for bold, <ul><li> for bullet points.
-**Exactly 2-3 bullet points only** — the most important points only.
-Keep it very concise and focused on translational/clinical value for the researcher.
+**Exactly 2-3 bullet points only** highlighting the most important translational/clinical findings.
+
+**Language Requirement**: Write the summary sentences in natural, professional **Korean**, but strictly keep key medical, scientific, and anatomical terminology in **English** (e.g., "Spinal cord injury 모델에서...", "Neuroplasticity를 촉진하여...").
+
+Title: {title}
 Abstract: {abstract}"""
+
+    # 의학 용어(손상, 질병 등)로 인한 차단을 방지하기 위한 안전 필터 해제
+    safety_settings = {
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+    }
     
     try:
         response = model.generate_content(
             prompt,
+            safety_settings=safety_settings,
             generation_config=genai.GenerationConfig(
-                max_output_tokens=500,
-                temperature=0.3
+                max_output_tokens=600,
+                temperature=0.2
             )
         )
         return response.text.strip()
     except Exception as e:
-        print(f"Gemini API Error: {e}")
-        return "<p>요약 생성 중 오류가 발생했습니다.</p>"
+        error_msg = str(e)
+        print(f"Gemini API Error for '{title[:30]}': {error_msg}")
+        return f"<p style='color:red;'>요약 생성 중 오류가 발생했습니다: {error_msg}</p>"
+
+def get_top_papers(all_papers, count=2):
+    """High-impact 저널을 우선으로 하여 가장 중요한 논문을 추출합니다."""
+    high_impact_papers = [p for p in all_papers if p["is_high_impact"]]
+    other_papers = [p for p in all_papers if not p["is_high_impact"]]
+    
+    # High-impact가 먼저, 그 다음 나머지 논문 순으로 합친 후 필요한 개수만큼 자름
+    sorted_papers = high_impact_papers + other_papers
+    return sorted_papers[:count]
+
+def format_paper_html(p, index=None):
+    summary = gemini_summarize(p["abstract"], p["title"])
+    index_str = f"{index}. " if index else ""
+    # High-impact 저널인 경우 강조 표시
+    journal_str = f"<strong><span style='color:#b30000;'>{p['journal']} (High-Impact)</span></strong>" if p["is_high_impact"] else p['journal']
+    
+    return f"""
+    <div style="margin-bottom: 25px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; background-color: #fafafa;">
+        <h4 style="margin-top: 0; color: #2c3e50;">{index_str}{p['title']}</h4>
+        <p style="margin: 5px 0; font-size: 0.9em;">
+            <strong>Journal:</strong> {journal_str}<br>
+            <strong>PMID:</strong> {p['pmid']} | <a href="{p['link']}" target="_blank" style="color: #2980b9;">PubMed 링크</a>
+        </p>
+        <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ccc;">
+            <strong style="color: #333;">💡 핵심 요약:</strong>
+            <div style="margin-top: 5px; color: #444;">{summary}</div>
+        </div>
+    </div>
+"""
 
 def send_email(neural_papers, sarc_papers):
     if not neural_papers and not sarc_papers:
-        print("No papers today")
+        print("No papers found for today's query.")
         return
         
-    body_html = f"""<html><body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
-    <p>안녕하세요, 연구자님.</p>
-    <p><strong>{today.strftime("%Y-%m-%d")}</strong> PubMed 등록 논문 요약입니다.</p>
-    <h3>【신경재생·가소성 섹션】</h3>
+    all_papers = neural_papers + sarc_papers
+    top_papers = get_top_papers(all_papers, count=2)
+    
+    body_html = f"""<html><body style="font-family: 'Malgun Gothic', dotum, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto;">
+    <h2 style="color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 10px;">📊 {yesterday_date} PubMed 최신 동향 리포트</h2>
+    <p>연구자님, 지정하신 전문 분야의 최신 논문 검색 결과입니다. 학술적 근거와 명확한 사실에 기반하여 요약되었습니다.</p>
 """
-    for i, p in enumerate(neural_papers, 1):
-        summary = gemini_summarize(p["abstract"], "neural regeneration and plasticity")
-        body_html += f"""
-    <p><strong>{i}. {p['title']}</strong><br>
-    Journal: {p['journal']}<br>
-    PMID: {p['pmid']}<br>
-    Link: <a href="{p['link']}">{p['link']}</a><br>
-    요약:<br>
-    {summary}</p>
+
+    # 1. 주목할 만한 주요 논문 (Top 1-2) 섹션
+    if top_papers:
+        body_html += """
+    <h3 style="color: #c0392b; margin-top: 30px; padding: 5px 10px; background-color: #fdebd0; border-left: 5px solid #c0392b;">
+        🌟 오늘의 주요 논문 Top 2
+    </h3>
+    <p style="font-size: 0.9em; color: #666;">* High-impact 저널 및 검색 적합도를 우선으로 선정되었습니다.</p>
 """
-    body_html += "<h3>【사르코페니아 섹션 (SCI 무관)】</h3>"
-    for i, p in enumerate(sarc_papers, 1):
-        summary = gemini_summarize(p["abstract"], "sarcopenia with drug repositioning, rehabilitation, electrical stimulation")
-        body_html += f"""
-    <p><strong>{i}. {p['title']}</strong><br>
-    Journal: {p['journal']}<br>
-    PMID: {p['pmid']}<br>
-    Link: <a href="{p['link']}">{p['link']}</a><br>
-    요약:<br>
-    {summary}</p>
+        for p in top_papers:
+            body_html += format_paper_html(p)
+
+    # 2. 신경재생 및 가소성 섹션
+    body_html += """
+    <h3 style="color: #2980b9; margin-top: 40px; padding: 5px 10px; background-color: #ebf5fb; border-left: 5px solid #2980b9;">
+        🧠 신경재생·가소성 섹션 (전체)
+    </h3>
 """
-    body_html += "<p><em>총평: Gemini 자동 분석 완료. 연구에 바로 활용하세요.</em></p></body></html>"
+    if neural_papers:
+        for i, p in enumerate(neural_papers, 1):
+            body_html += format_paper_html(p, index=i)
+    else:
+        body_html += "<p>해당 분야의 새로운 논문이 없습니다.</p>"
+
+    # 3. 사르코페니아 섹션
+    body_html += """
+    <h3 style="color: #27ae60; margin-top: 40px; padding: 5px 10px; background-color: #e9f7ef; border-left: 5px solid #27ae60;">
+        💪 사르코페니아 섹션 (전체)
+    </h3>
+"""
+    if sarc_papers:
+        for i, p in enumerate(sarc_papers, 1):
+            body_html += format_paper_html(p, index=i)
+    else:
+        body_html += "<p>해당 분야의 새로운 논문이 없습니다.</p>"
+
+    body_html += """
+    <hr style="margin-top: 40px; border: 0; border-top: 1px solid #eee;">
+    <p style="text-align: center; color: #888; font-size: 0.85em;">
+        <em>본 이메일은 Gemini API를 활용하여 자동화된 검색 및 요약 결과를 제공합니다.</em>
+    </p>
+    </body></html>
+"""
     
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[{yesterday_date}] 신경재생·가소성 + 사르코페니아 최신 논문 요약 ({len(neural_papers)+len(sarc_papers)}건)"
+    msg["Subject"] = f"[{yesterday_date}] 주요 논문 요약: 신경재생 & 사르코페니아 (총 {len(all_papers)}건)"
     msg["From"] = f"Neuro-Sarc Alert <{GMAIL_USER}>"
     msg["To"] = TO_EMAIL
     
@@ -158,16 +234,16 @@ def send_email(neural_papers, sarc_papers):
             server.starttls()
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
             server.send_message(msg)
-        print("✅ Concise HTML Email sent successfully!")
+        print("✅ HTML Email sent successfully!")
     except Exception as e:
         print(f"이메일 전송 중 오류 발생: {e}")
 
 if __name__ == "__main__":
     print("=== Neuro-Sarc Daily Alert Script Started ===")
-    print(f"Yesterday date: {yesterday_date}")
+    print(f"Searching papers for date: {yesterday_date}")
     
-    neural = fetch_papers(NEURAL_QUERY)
-    sarc = fetch_papers(SARC_QUERY)
+    neural = fetch_papers(NEURAL_QUERY, max_results=10) # 속도 및 API 제한을 고려해 검색 수 조정
+    sarc = fetch_papers(SARC_QUERY, max_results=10)
     
     send_email(neural, sarc)
     print("=== Script completed SUCCESSFULLY ===")
