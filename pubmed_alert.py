@@ -105,7 +105,7 @@ def gemini_summarize(abstract, title):
         return "<p>제공된 Abstract가 없습니다.</p>"
     
     # 무료로 사용 가능한 최상위 지능 모델 적용
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+    model = genai.GenerativeModel('gemini-1.5-flash')
     
     # 임상/학술적 근거와 정확한 사실 기반을 강조한 프롬프트 구성
     prompt = f"""You are a senior clinical researcher evaluating medical literature.
