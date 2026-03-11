@@ -1,4 +1,5 @@
 import os
+import time
 import datetime
 import traceback
 from Bio import Entrez
@@ -8,12 +9,15 @@ from email.mime.text import MIMEText
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-# 환경 변수 설정
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# 1. 환경 변수 설정 (에러 방지 강화)
+GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 TO_EMAIL = os.getenv("TO_EMAIL")
 NCBI_EMAIL = os.getenv("NCBI_EMAIL")
+
+if not GEMINI_API_KEY:
+    raise ValueError("🚨 치명적 에러: API 키를 찾을 수 없습니다! GitHub Repository secrets에 키가 정확히 등록되었는지 확인하세요.")
 
 # Gemini API 및 Entrez 초기화
 genai.configure(api_key=GEMINI_API_KEY)
@@ -100,7 +104,8 @@ def gemini_summarize(abstract, title):
     if not abstract.strip() or abstract == "Unknown":
         return "<p>제공된 Abstract가 없습니다.</p>"
     
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    # 무료로 사용 가능한 최상위 지능 모델 적용
+    model = genai.GenerativeModel('gemini-2.5-pro')
     
     # 임상/학술적 근거와 정확한 사실 기반을 강조한 프롬프트 구성
     prompt = f"""You are a senior clinical researcher evaluating medical literature.
@@ -131,6 +136,8 @@ Abstract: {abstract}"""
                 temperature=0.2
             )
         )
+        # API 호출 제한(Rate Limit) 방지를 위해 요약 완료 후 5초 휴식
+        time.sleep(5)
         return response.text.strip()
     except Exception as e:
         error_msg = str(e)
@@ -205,7 +212,7 @@ def send_email(neural_papers, sarc_papers):
     # 3. 사르코페니아 섹션
     body_html += """
     <h3 style="color: #27ae60; margin-top: 40px; padding: 5px 10px; background-color: #e9f7ef; border-left: 5px solid #27ae60;">
-        💪 사르코페니아 섹션 (전체)
+        💪 Sarcopenia 섹션 (전체)
     </h3>
 """
     if sarc_papers:
