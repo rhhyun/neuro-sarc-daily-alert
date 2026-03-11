@@ -30,9 +30,9 @@ jobs:
       - name: Check files in repository
         run: ls -la  # 에러 원인 파악을 위해 현재 폴더의 파일 목록을 출력합니다.
 
-      - name: Run daily alert script
+- name: Run daily alert script
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} # 이 줄이 제대로 있는지 확인
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
