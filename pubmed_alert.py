@@ -2,18 +2,20 @@ import os
 import datetime
 import traceback
 from Bio import Entrez
-from openai import OpenAI
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import google.generativeai as genai  # OpenAI 대신 Google 공식 라이브러리 사용
 
-# 환경 변수
-XAI_API_KEY = os.getenv("XAI_API_KEY")
+# 환경 변수 설정
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 TO_EMAIL = os.getenv("TO_EMAIL")
 NCBI_EMAIL = os.getenv("NCBI_EMAIL")
 
+# Gemini API 및 Entrez 초기화
+genai.configure(api_key=GEMINI_API_KEY)
 Entrez.email = NCBI_EMAIL
 
 HIGH_IMPACT_JOURNALS = [
@@ -83,37 +85,46 @@ def fetch_papers(query, max_results=30):
     print(f"Final papers collected: {len(papers)}")
     return papers[:8]
 
-def grok_summarize(abstract, category):
+def gemini_summarize(abstract, category):
     if not abstract.strip():
         return "<p>Abstract 없음.</p>"
-    client = OpenAI(api_key=XAI_API_KEY, base_url="https://api.x.ai/v1")
-    prompt = f"""You are a senior researcher in neural regeneration/plasticity and sarcopenia.
+    
+    # 무료로 가장 빠르고 효율적인 모델 선택
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    prompt = f"""You are a senior clinical researcher in neural regeneration/plasticity and sarcopenia.
+Strictly base your summary ONLY on the provided abstract. Ensure high academic accuracy and clear evidence basis.
 Output **ONLY HTML** (no ```html, no extra text).
 Use <strong> for bold, <ul><li> for bullet points.
 **Exactly 2-3 bullet points only** — the most important points only.
-Keep it very concise and focused on translational value for the researcher.
+Keep it very concise and focused on translational/clinical value for the researcher.
 Abstract: {abstract}"""
-    response = client.chat.completions.create(
-        model="grok-4-fast",
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=500,
-        temperature=0.3
-    )
-    return response.choices[0].message.content.strip()
+    
+    try:
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                max_output_tokens=500,
+                temperature=0.3
+            )
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"Gemini API Error: {e}")
+        return "<p>요약 생성 중 오류가 발생했습니다.</p>"
 
 def send_email(neural_papers, sarc_papers):
     if not neural_papers and not sarc_papers:
         print("No papers today")
         return
-
+        
     body_html = f"""<html><body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
     <p>안녕하세요, 연구자님.</p>
     <p><strong>{today.strftime("%Y-%m-%d")}</strong> PubMed 등록 논문 요약입니다.</p>
-
     <h3>【신경재생·가소성 섹션】</h3>
 """
     for i, p in enumerate(neural_papers, 1):
-        summary = grok_summarize(p["abstract"], "neural regeneration and plasticity")
+        summary = gemini_summarize(p["abstract"], "neural regeneration and plasticity")
         body_html += f"""
     <p><strong>{i}. {p['title']}</strong><br>
     Journal: {p['journal']}<br>
@@ -122,10 +133,9 @@ def send_email(neural_papers, sarc_papers):
     요약:<br>
     {summary}</p>
 """
-
     body_html += "<h3>【사르코페니아 섹션 (SCI 무관)】</h3>"
     for i, p in enumerate(sarc_papers, 1):
-        summary = grok_summarize(p["abstract"], "sarcopenia with drug repositioning, rehabilitation, electrical stimulation")
+        summary = gemini_summarize(p["abstract"], "sarcopenia with drug repositioning, rehabilitation, electrical stimulation")
         body_html += f"""
     <p><strong>{i}. {p['title']}</strong><br>
     Journal: {p['journal']}<br>
@@ -134,25 +144,30 @@ def send_email(neural_papers, sarc_papers):
     요약:<br>
     {summary}</p>
 """
-
-    body_html += "<p><em>총평: Grok-4 자동 분석 완료. 연구에 바로 활용하세요.</em></p></body></html>"
-
+    body_html += "<p><em>총평: Gemini 자동 분석 완료. 연구에 바로 활용하세요.</em></p></body></html>"
+    
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"[{yesterday_date}] 신경재생·가소성 + 사르코페니아 논문 요약 ({len(neural_papers)+len(sarc_papers)}건)"
+    msg["Subject"] = f"[{yesterday_date}] 신경재생·가소성 + 사르코페니아 최신 논문 요약 ({len(neural_papers)+len(sarc_papers)}건)"
     msg["From"] = f"Neuro-Sarc Alert <{GMAIL_USER}>"
     msg["To"] = TO_EMAIL
+    
     msg.attach(MIMEText(body_html, "html", "utf-8"))
-
-    with smtplib.SMTP("smtp.gmail.com", 587) as server:
-        server.starttls()
-        server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-        server.send_message(msg)
-    print("✅ Concise HTML Email sent successfully!")
+    
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            server.send_message(msg)
+        print("✅ Concise HTML Email sent successfully!")
+    except Exception as e:
+        print(f"이메일 전송 중 오류 발생: {e}")
 
 if __name__ == "__main__":
     print("=== Neuro-Sarc Daily Alert Script Started ===")
     print(f"Yesterday date: {yesterday_date}")
+    
     neural = fetch_papers(NEURAL_QUERY)
     sarc = fetch_papers(SARC_QUERY)
+    
     send_email(neural, sarc)
     print("=== Script completed SUCCESSFULLY ===")
