@@ -2,10 +2,12 @@ name: Neuro-Sarc Paper Alert
 
 on:
   schedule:
-    # 한국 시간(KST) 오전 8시는 UTC 기준 전날 오후 11시(23:00)입니다.
-    # 아래 설정은 UTC 기준 일, 화, 목요일 23:00에 실행됩니다. (KST 기준 월, 수, 금 08:00)
     - cron: '0 23 * * 0,2,4'
-  workflow_dispatch: # GitHub 웹페이지에서 수동으로 실행할 수 있게 해주는 옵션입니다.
+  workflow_dispatch:
+
+# Node.js 20 경고 메시지를 없애기 위한 환경 변수 설정
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   send-alert:
@@ -18,12 +20,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10' # 안정적인 최신 파이썬 버전 사용
+          python-version: '3.10'
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install google-generativeai biopython
+
+      - name: Check files in repository
+        run: ls -la  # 에러 원인 파악을 위해 현재 폴더의 파일 목록을 출력합니다.
 
       - name: Run daily alert script
         env:
@@ -32,6 +37,4 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           NCBI_EMAIL: ${{ secrets.NCBI_EMAIL }}
-        # 실제 파이썬 스크립트가 저장된 폴더명/파일명으로 경로를 맞춰주세요.
-        # 예: neuro-sarc-daily-alert/daily_alert.py
-        run: python daily_alert.py
+        run: python pubmed_alert.py
