@@ -9,7 +9,7 @@ from email.mime.text import MIMEText
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
-# 1. 환경 변수 설정 (에러 방지 강화)
+# 환경 변수 설정
 GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
@@ -83,7 +83,6 @@ def fetch_papers(query, max_results=30):
             abstract_list = find_key(abstract_section, "AbstractText", [])
             abstract = " ".join([str(a) for a in abstract_list]) if isinstance(abstract_list, (list, tuple)) else str(abstract_list)
 
-            # High-impact 저널 여부 확인 (대소문자 구분 없이)
             is_high_impact = any(j.lower() in journal.lower() for j in HIGH_IMPACT_JOURNALS)
             
             papers.append({
@@ -91,7 +90,7 @@ def fetch_papers(query, max_results=30):
                 "title": title, 
                 "journal": journal, 
                 "abstract": abstract, 
-                "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                "link": f"[https://pubmed.ncbi.nlm.nih.gov/](https://pubmed.ncbi.nlm.nih.gov/){pmid}/",
                 "is_high_impact": is_high_impact
             })
         except Exception as e:
@@ -104,14 +103,14 @@ def gemini_summarize(abstract, title):
     if not abstract.strip() or abstract == "Unknown":
         return "<p>제공된 Abstract가 없습니다.</p>"
     
-    # 무료로 사용 가능한 최상위 지능 모델 적용
+    # 2.5 Flash 모델 유지 (가장 안정적이고 빠름)
     model = genai.GenerativeModel('gemini-2.5-flash')
     
-    # 임상/학술적 근거와 정확한 사실 기반을 강조한 프롬프트 구성
     prompt = f"""You are a senior clinical researcher evaluating medical literature.
-Strictly base your summary ONLY on the provided abstract. The content must be based on clear evidence, accurate facts, and relevant clinical/academic guidelines. Do not hallucinate or add outside information.
-Output **ONLY HTML** (no ```html, no markdown blocks).
+Strictly base your summary ONLY on the provided abstract.
+Output **ONLY HTML** (no ```html blocks). 
 Use <strong> for bold, <ul><li> for bullet points.
+CRITICAL: Do not use any mathematical < or > symbols in the text, as they break email HTML rendering.
 **Exactly 2-3 bullet points only** highlighting the most important translational/clinical findings.
 
 **Language Requirement**: Write the summary sentences in natural, professional **Korean**, but strictly keep key medical, scientific, and anatomical terminology in **English** (e.g., "Spinal cord injury 모델에서...", "Neuroplasticity를 촉진하여...").
@@ -119,7 +118,6 @@ Use <strong> for bold, <ul><li> for bullet points.
 Title: {title}
 Abstract: {abstract}"""
 
-    # 의학 용어(손상, 질병 등)로 인한 차단을 방지하기 위한 안전 필터 해제
     safety_settings = {
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -127,36 +125,47 @@ Abstract: {abstract}"""
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
     
-    try:
-        response = model.generate_content(
-            prompt,
-            safety_settings=safety_settings,
-            generation_config=genai.GenerationConfig(
-                max_output_tokens=600,
-                temperature=0.2
+    # API 호출 제한 방지 및 이메일 잘림 방지를 위한 재시도 로직
+    for attempt in range(3):
+        try:
+            response = model.generate_content(
+                prompt,
+                safety_settings=safety_settings,
+                generation_config=genai.GenerationConfig(
+                    max_output_tokens=1000,
+                    temperature=0.2
+                )
             )
-        )
-        # API 호출 제한(Rate Limit) 방지를 위해 요약 완료 후 5초 휴식
-        time.sleep(5)
-        return response.text.strip()
-    except Exception as e:
-        error_msg = str(e)
-        print(f"Gemini API Error for '{title[:30]}': {error_msg}")
-        return f"<p style='color:red;'>요약 생성 중 오류가 발생했습니다: {error_msg}</p>"
+            
+            summary_text = response.text.strip()
+            
+            # 이메일 렌더링을 깨뜨리는 마크다운 찌꺼기 완벽 제거
+            summary_text = summary_text.replace("```html", "").replace("```", "").strip()
+            
+            # [핵심] 무료 API 1분당 5회(5 RPM) 제한을 피하기 위해 15초 대기
+            print(f"Summary generated. Waiting 15s to respect rate limits...")
+            time.sleep(15) 
+            return summary_text
+            
+        except Exception as e:
+            error_msg = str(e)
+            if "429" in error_msg or "Quota" in error_msg:
+                print(f"Rate limit hit. Waiting 60 seconds before retry... (Attempt {attempt+1}/3)")
+                time.sleep(60) # 튕기면 1분간 안전하게 휴식 후 재시도
+            else:
+                return f"<p style='color:red;'>요약 생성 중 오류가 발생했습니다: {error_msg}</p>"
+                
+    return "<p style='color:red;'>API 호출 횟수 제한으로 요약하지 못했습니다.</p>"
 
 def get_top_papers(all_papers, count=2):
-    """High-impact 저널을 우선으로 하여 가장 중요한 논문을 추출합니다."""
     high_impact_papers = [p for p in all_papers if p["is_high_impact"]]
     other_papers = [p for p in all_papers if not p["is_high_impact"]]
-    
-    # High-impact가 먼저, 그 다음 나머지 논문 순으로 합친 후 필요한 개수만큼 자름
     sorted_papers = high_impact_papers + other_papers
     return sorted_papers[:count]
 
 def format_paper_html(p, index=None):
     summary = gemini_summarize(p["abstract"], p["title"])
     index_str = f"{index}. " if index else ""
-    # High-impact 저널인 경우 강조 표시
     journal_str = f"<strong><span style='color:#b30000;'>{p['journal']} (High-Impact)</span></strong>" if p["is_high_impact"] else p['journal']
     
     return f"""
@@ -186,7 +195,6 @@ def send_email(neural_papers, sarc_papers):
     <p>연구자님, 지정하신 전문 분야의 최신 논문 검색 결과입니다. 학술적 근거와 명확한 사실에 기반하여 요약되었습니다.</p>
 """
 
-    # 1. 주목할 만한 주요 논문 (Top 1-2) 섹션
     if top_papers:
         body_html += """
     <h3 style="color: #c0392b; margin-top: 30px; padding: 5px 10px; background-color: #fdebd0; border-left: 5px solid #c0392b;">
@@ -197,7 +205,6 @@ def send_email(neural_papers, sarc_papers):
         for p in top_papers:
             body_html += format_paper_html(p)
 
-    # 2. 신경재생 및 가소성 섹션
     body_html += """
     <h3 style="color: #2980b9; margin-top: 40px; padding: 5px 10px; background-color: #ebf5fb; border-left: 5px solid #2980b9;">
         🧠 신경재생·가소성 섹션 (전체)
@@ -209,10 +216,9 @@ def send_email(neural_papers, sarc_papers):
     else:
         body_html += "<p>해당 분야의 새로운 논문이 없습니다.</p>"
 
-    # 3. 사르코페니아 섹션
     body_html += """
     <h3 style="color: #27ae60; margin-top: 40px; padding: 5px 10px; background-color: #e9f7ef; border-left: 5px solid #27ae60;">
-        💪 Sarcopenia 섹션 (전체)
+        💪 사르코페니아 섹션 (전체)
     </h3>
 """
     if sarc_papers:
@@ -249,8 +255,9 @@ if __name__ == "__main__":
     print("=== Neuro-Sarc Daily Alert Script Started ===")
     print(f"Searching papers for date: {yesterday_date}")
     
-    neural = fetch_papers(NEURAL_QUERY, max_results=10) # 속도 및 API 제한을 고려해 검색 수 조정
-    sarc = fetch_papers(SARC_QUERY, max_results=10)
+    # 무료 API의 속도를 고려하여 각 분야당 최대 7개로 제한 (총 14개, 요약 소요 시간 약 3~4분)
+    neural = fetch_papers(NEURAL_QUERY, max_results=7) 
+    sarc = fetch_papers(SARC_QUERY, max_results=7)
     
     send_email(neural, sarc)
     print("=== Script completed SUCCESSFULLY ===")
