@@ -1,10 +1,3 @@
-diff --git a/README.md b/README.md
-index 7c9e335676c7de571787d3d5d633b20911a02d8c..232d0b64beabad3f00cb114f5b52d9a477d2e333 100644
---- a/README.md
-+++ b/README.md
-@@ -1 +1,32 @@
--# neuro-sarc-daily-alert
-\ No newline at end of file
 +# neuro-sarc-daily-alert
 +
 +PubMed 기반으로 **신경재생/가소성 + 사르코페니아 + 의료 AI** 논문을 수집하고,
