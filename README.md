@@ -1,3 +1,5 @@
+-# neuro-sarc-daily-alert
+\ No newline at end of file
 +# neuro-sarc-daily-alert
 +
 +PubMed 기반으로 **신경재생/가소성 + 사르코페니아 + 의료 AI** 논문을 수집하고,
@@ -22,7 +24,8 @@
 +- `MAX_RESULTS_NEURAL` (기본 5)
 +- `MAX_RESULTS_SARC` (기본 5)
 +- `MAX_RESULTS_AI` (기본 3)
-+- `SUMMARY_DELAY_SECONDS` (기본 12)
++- `SUMMARY_DELAY_SECONDS` (기본 8)
++- `SUMMARY_BATCH_SIZE` (기본 5, 배치 요약 단위)
 +- `ENFORCE_MWS_SCHEDULE` (`true`일 때 월/수/토만 실행)
 +
 +## 실행
