@@ -2,6 +2,8 @@ import os
 import time
 import datetime
 import traceback
+import html  # [추가] HTML 특수문자 이스케이프용
+import re    # [추가] 마크다운 변환용
 from Bio import Entrez
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -90,7 +92,7 @@ def fetch_papers(query, max_results=30):
                 "title": title, 
                 "journal": journal, 
                 "abstract": abstract, 
-                "link": f"[https://pubmed.ncbi.nlm.nih.gov/](https://pubmed.ncbi.nlm.nih.gov/){pmid}/",
+                "link": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
                 "is_high_impact": is_high_impact
             })
         except Exception as e:
@@ -103,14 +105,13 @@ def gemini_summarize(abstract, title):
     if not abstract.strip() or abstract == "Unknown":
         return "<p>제공된 Abstract가 없습니다.</p>"
     
-    # 2.5 Flash 모델 유지 (가장 안정적이고 빠름)
     model = genai.GenerativeModel('gemini-2.5-flash')
     
+    # [핵심] 모델에게 HTML 태그 없이 순수 마크다운(Plain Text)으로만 작성하라고 지시합니다.
     prompt = f"""You are a senior clinical researcher evaluating medical literature.
 Strictly base your summary ONLY on the provided abstract.
-Output **ONLY HTML** (no ```html blocks). 
-Use <strong> for bold, <ul><li> for bullet points.
-CRITICAL: Do not use any mathematical < or > symbols in the text, as they break email HTML rendering.
+Output in **PLAIN TEXT format with Markdown**. DO NOT output any HTML tags.
+Use **bold** for emphasis, and use hyphen (-) for bullet points.
 **Exactly 2-3 bullet points only** highlighting the most important translational/clinical findings.
 
 **Language Requirement**: Write the summary sentences in natural, professional **Korean**, but strictly keep key medical, scientific, and anatomical terminology in **English** (e.g., "Spinal cord injury 모델에서...", "Neuroplasticity를 촉진하여...").
@@ -125,7 +126,6 @@ Abstract: {abstract}"""
         HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
     }
     
-    # API 호출 제한 방지 및 이메일 잘림 방지를 위한 재시도 로직
     for attempt in range(3):
         try:
             response = model.generate_content(
@@ -137,21 +137,26 @@ Abstract: {abstract}"""
                 )
             )
             
-            summary_text = response.text.strip()
+            raw_summary = response.text.strip()
             
-            # 이메일 렌더링을 깨뜨리는 마크다운 찌꺼기 완벽 제거
-            summary_text = summary_text.replace("```html", "").replace("```", "").strip()
+            # --- [이메일 잘림 방지 로직 시작] ---
+            # 1. 의학 용어 괄호(<, >)가 이메일 태그로 오작동하지 않게 안전한 문자로 변환
+            safe_summary = html.escape(raw_summary)
+            # 2. 모델이 작성한 마크다운 볼드체(**)를 HTML <strong> 태그로 변환
+            safe_summary = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', safe_summary)
+            # 3. 줄바꿈 기호를 HTML <br> 태그로 변환하여 가독성 유지
+            safe_summary = safe_summary.replace('\n', '<br>')
+            # --- [이메일 잘림 방지 로직 끝] ---
             
-            # [핵심] 무료 API 1분당 5회(5 RPM) 제한을 피하기 위해 15초 대기
             print(f"Summary generated. Waiting 15s to respect rate limits...")
-            time.sleep(15) 
-            return summary_text
+            time.sleep(15) # 무료 할당량(1분당 5회) 우회를 위한 필수 대기 시간
+            return safe_summary
             
         except Exception as e:
             error_msg = str(e)
             if "429" in error_msg or "Quota" in error_msg:
                 print(f"Rate limit hit. Waiting 60 seconds before retry... (Attempt {attempt+1}/3)")
-                time.sleep(60) # 튕기면 1분간 안전하게 휴식 후 재시도
+                time.sleep(60) 
             else:
                 return f"<p style='color:red;'>요약 생성 중 오류가 발생했습니다: {error_msg}</p>"
                 
@@ -177,7 +182,7 @@ def format_paper_html(p, index=None):
         </p>
         <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ccc;">
             <strong style="color: #333;">💡 핵심 요약:</strong>
-            <div style="margin-top: 5px; color: #444;">{summary}</div>
+            <div style="margin-top: 5px; color: #444; line-height: 1.8;">{summary}</div>
         </div>
     </div>
 """
@@ -255,7 +260,7 @@ if __name__ == "__main__":
     print("=== Neuro-Sarc Daily Alert Script Started ===")
     print(f"Searching papers for date: {yesterday_date}")
     
-    # 무료 API의 속도를 고려하여 각 분야당 최대 7개로 제한 (총 14개, 요약 소요 시간 약 3~4분)
+    # 무료 API의 속도를 고려하여 각 분야당 최대 7개로 제한
     neural = fetch_papers(NEURAL_QUERY, max_results=7) 
     sarc = fetch_papers(SARC_QUERY, max_results=7)
     
