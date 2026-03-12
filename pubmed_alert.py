@@ -44,13 +44,13 @@
 +    "GMAIL_APP_PASSWORD": GMAIL_APP_PASSWORD,
 +    "NCBI_EMAIL": NCBI_EMAIL,
 +}
- 
--# Gemini API 및 Entrez 초기화
--genai.configure(api_key=GEMINI_API_KEY)
++
 +missing = [key for key, value in REQUIRED_ENV.items() if not value]
 +if missing:
 +    raise ValueError(f"🚨 필수 환경 변수가 누락되었습니다: {', '.join(missing)}")
-+
+ 
+-# Gemini API 및 Entrez 초기화
+-genai.configure(api_key=GEMINI_API_KEY)
 +client = OpenAI(api_key=OPENAI_API_KEY)
  Entrez.email = NCBI_EMAIL
  
@@ -434,16 +434,16 @@
 +    unique = {}
 +    for paper in papers:
 +        unique[paper["pmid"]] = paper
-+
+ 
+-def format_paper_html(p, index=None):
+-    summary = gemini_summarize(p["abstract"], p["title"])
 +    summary_map = {}
 +    unique_papers = list(unique.values())
 +    for batch in chunked(unique_papers, max(1, SUMMARY_BATCH_SIZE)):
 +        batch_map = summarize_batch(batch)
 +        summary_map.update(batch_map)
 +    return summary_map
- 
--def format_paper_html(p, index=None):
--    summary = gemini_summarize(p["abstract"], p["title"])
++
 +
 +def format_paper_html(paper, summary_map, index=None):
 +    summary_html = summary_to_html(summary_map.get(paper["pmid"], "- 요약 생성 실패"))
@@ -464,7 +464,7 @@
          <p style="margin: 5px 0; font-size: 0.9em;">
              <strong>Journal:</strong> {journal_str}<br>
 -            <strong>PMID:</strong> {p['pmid']} | <a href="{p['link']}" target="_blank" style="color: #2980b9;">PubMed 링크</a>
-+            <strong>PMID:</strong> {paper['pmid']} | <a href="{paper['link']}" target="_blank" style="color: #2980b9;">PubMed 링크</a>
++            <strong>PMID:</strong> <a href="{paper['link']}" target="_blank" style="color: #2980b9; text-decoration: underline;">{paper['pmid']}</a> | <a href="{paper['link']}" target="_blank" style="color: #2980b9; text-decoration: underline;">PubMed 링크</a>
          </p>
          <div style="margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ccc;">
              <strong style="color: #333;">💡 핵심 요약:</strong>
@@ -476,6 +476,55 @@
  
 -def send_email(neural_papers, sarc_papers):
 -    if not neural_papers and not sarc_papers:
++
++
++
++def format_paper_text(paper, summary_map, index=None):
++    summary = summary_map.get(paper["pmid"], "- 요약 생성 실패")
++    index_str = f"{index}. " if index else ""
++    return (
++        f"{index_str}{paper['title']}\n"
++        f"Journal: {paper['journal']}" + (" (High-Impact)" if paper["is_high_impact"] else "") + "\n"
++        f"PMID: {paper['pmid']} | {paper['link']}\n"
++        f"핵심 요약:\n{summary}\n"
++    )
++
++
++def build_plaintext_email(neural_papers, sarc_papers, ai_papers, top_papers, summary_map):
++    lines = [
++        f"📊 {yesterday_date} PubMed 최신 동향 리포트",
++        "연구자님, 지정하신 전문 분야의 최신 논문 검색 결과입니다. 학술적 근거와 명확한 사실에 기반하여 요약되었습니다.",
++        "",
++    ]
++
++    if top_papers:
++        lines.extend(["🌟 오늘의 주요 논문 Top 2", "High-impact 저널 및 검색 적합도를 우선으로 선정되었습니다.", ""])
++        for paper in top_papers:
++            lines.append(format_paper_text(paper, summary_map))
++
++    lines.extend(["🧠 신경재생·가소성 섹션 (전체)", ""])
++    if neural_papers:
++        for idx, paper in enumerate(neural_papers, 1):
++            lines.append(format_paper_text(paper, summary_map, index=idx))
++    else:
++        lines.append("해당 분야의 새로운 논문이 없습니다.\n")
++
++    lines.extend(["💪 사르코페니아 섹션 (전체)", ""])
++    if sarc_papers:
++        for idx, paper in enumerate(sarc_papers, 1):
++            lines.append(format_paper_text(paper, summary_map, index=idx))
++    else:
++        lines.append("해당 분야의 새로운 논문이 없습니다.\n")
++
++    lines.extend(["🤖 의료 AI·뇌 전기자극/진단 섹션", ""])
++    if ai_papers:
++        for idx, paper in enumerate(ai_papers, 1):
++            lines.append(format_paper_text(paper, summary_map, index=idx))
++    else:
++        lines.append("해당 분야의 새로운 논문이 없습니다.\n")
++
++    lines.append("본 이메일은 PubMed + OpenAI API 기반 자동화 리포트입니다.")
++    return "\n".join(lines)
 +
 +def send_email(neural_papers, sarc_papers, ai_papers):
 +    all_papers = neural_papers + sarc_papers + ai_papers
@@ -560,6 +609,8 @@
      msg["From"] = f"Neuro-Sarc Alert <{GMAIL_USER}>"
      msg["To"] = TO_EMAIL
 -    
++    body_text = build_plaintext_email(neural_papers, sarc_papers, ai_papers, top_papers, summary_map)
++    msg.attach(MIMEText(body_text, "plain", "utf-8"))
      msg.attach(MIMEText(body_html, "html", "utf-8"))
 -    
 -    try:
