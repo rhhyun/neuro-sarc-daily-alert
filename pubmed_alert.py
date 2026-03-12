@@ -25,6 +25,7 @@ MAX_RESULTS_AI = int(os.getenv("MAX_RESULTS_AI", "3"))
 MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 SUMMARY_DELAY_SECONDS = int(os.getenv("SUMMARY_DELAY_SECONDS", "8"))
 SUMMARY_BATCH_SIZE = int(os.getenv("SUMMARY_BATCH_SIZE", "5"))
+USE_LOCAL_SUMMARY_ONLY = os.getenv("USE_LOCAL_SUMMARY_ONLY", "false").lower() == "true"
 SHOULD_ENFORCE_SCHEDULE = os.getenv("ENFORCE_MWS_SCHEDULE", "false").lower() == "true"
 
 REQUIRED_ENV = {
@@ -178,10 +179,25 @@ def fetch_papers(query, topic, max_results=30):
 
 def simple_fallback_summary(abstract: str) -> str:
     sentences = re.split(r"(?<=[.!?])\s+", abstract)
-    selected = [s.strip() for s in sentences if len(s.strip()) > 40][:2]
+    selected = [s.strip() for s in sentences if len(s.strip()) > 30][:3]
     if not selected:
         return "- 핵심 내용 추출이 제한되었습니다. PubMed 링크에서 원문 초록을 확인해 주세요."
-    return "\n".join(f"- {s}" for s in selected)
+
+    if len(selected) == 1:
+        return "\n".join(
+            [
+                f"- 연구 배경/목적: {selected[0]}",
+                "- 주요 결과/해석: 초록 내 핵심 결과를 확인했으나, 자동 요약 품질 보전을 위해 원문 초록 확인을 권장합니다.",
+            ]
+        )
+
+    return "\n".join(
+        [
+            f"- 연구 배경/목적: {selected[0]}",
+            f"- 주요 결과: {selected[1]}",
+            f"- 임상/전임상 시사점: {selected[2]}" if len(selected) > 2 else "- 임상/전임상 시사점: 기능 회복(functional recovery) 또는 기전적 의미를 원문에서 추가 확인하세요.",
+        ]
+    )
 
 
 def sanitize_summary(raw_summary: str) -> str:
@@ -260,6 +276,10 @@ def summarize_batch(papers):
     if not entries:
         return fallback_map
 
+    if USE_LOCAL_SUMMARY_ONLY:
+        print("USE_LOCAL_SUMMARY_ONLY=true, skipping OpenAI calls and using abstract fallback summaries.")
+        return fallback_map
+
     batch_prompt = (
         "아래 논문들의 abstract만 근거로 요약하세요.\n"
         "각 논문마다 2-3개 bullet만 작성하세요.\n"
@@ -327,6 +347,7 @@ def build_summary_map(papers):
 
     summary_map = {}
     unique_papers = list(unique.values())
+    # 큰 배치가 토큰 초과를 일으켜 전체 실패할 수 있으므로, 기본값(5) 기반 소배치를 유지
     for batch in chunked(unique_papers, max(1, SUMMARY_BATCH_SIZE)):
         batch_map = summarize_batch(batch)
         summary_map.update(batch_map)

@@ -24,6 +24,7 @@ OpenAI로 2~3개 핵심 bullet 요약을 생성해 이메일로 발송하는 자
 - `MAX_RESULTS_AI` (기본 3)
 - `SUMMARY_DELAY_SECONDS` (기본 8)
 - `SUMMARY_BATCH_SIZE` (기본 5, 배치 요약 단위)
+- `USE_LOCAL_SUMMARY_ONLY` (`true`면 API 호출 없이 abstract 기반 로컬 요약만 사용)
 - `ENFORCE_MWS_SCHEDULE` (`true`일 때 월/수/토만 실행)
 
 ## 실행
