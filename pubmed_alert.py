@@ -1,8 +1,3 @@
-diff --git a/pubmed_alert.py b/pubmed_alert.py
-index 77cbdc6c38e13630c8b328d485bfcdf4e1e14b8c..438f8a2e2048b8b014941d3d78d70d3647468bcd 100644
---- a/pubmed_alert.py
-+++ b/pubmed_alert.py
-@@ -1,270 +1,383 @@
 -import os
 -import time
  import datetime
