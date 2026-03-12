@@ -1,21 +1,3 @@
-#!/usr/bin/env python3
-"""
-PubMed 자동 알림 스크립트 v2.0
-- 신경재생·가소성, 사르코페니아, 의료AI·뇌자극 분야 최신 논문
-- 매주 월/수/토 실행 (GitHub Actions 스케줄)
-- Gemini 2.5 Flash 한국어 요약, Gmail 발송
-
-수정 이력 (v2.0):
-  - 중복 API 호출 방지 (PMID 기반 summary cache)
-  - 저널 고영향력 판별 로직 오탐 수정 (단어 경계 처리)
-  - Gemini 서두 문구 자동 제거 (정규식)
-  - 마크다운 볼드체 완전 제거
-  - 월/수/토 스케줄 맞춤 동적 날짜 범위
-  - 의료AI·뇌전기자극 3번째 섹션 추가
-  - Top 3 논문은 아래 섹션에서 중복 표시 안 됨
-  - 지수 백오프 Rate limit 재시도 로직
-"""
-
 import os
 import re
 import time
